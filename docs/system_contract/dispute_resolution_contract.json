@@ -1,0 +1,250 @@
+{
+    "contract_scope": {
+      "name": "dispute_resolution_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [
+        "core_subscription_contract",
+        "creator_economy_contract",
+        "content_distribution_contract",
+        "membership_relationships_contract",
+        "notification_contract"
+      ],
+      "allowed_changes": [
+        "new_dispute_types",
+        "new_resolution_workflows",
+        "regulatory_compliance_updates"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "ledger_mutation",
+        "wallet_mutation",
+        "content_visibility_mutation",
+        "payout_execution"
+      ],
+      "rule": "This contract governs dispute lifecycle, evidence, and resolution decisions without mutating authoritative business or financial state."
+    },
+  
+    "architecture_principle": "human_in_the_loop_orchestration",
+  
+    "purpose": "Manage supporter and creator disputes through auditable workflows that reference authoritative state without rewriting history.",
+  
+    "core_invariant": {
+      "rule": "Every dispute outcome must be explainable without mutating historical business or financial facts.",
+      "failure_is": "unexplainable_dispute_outcome"
+    },
+  
+    "authoritative_boundaries": {
+      "subscription_state": {
+        "source": "core_subscription_contract.Subscription",
+        "authority": "read_only"
+      },
+      "access_entitlement": {
+        "source": "core_subscription_contract.AccessEntitlement",
+        "authority": "read_only"
+      },
+      "financial_events": {
+        "source": "creator_economy_contract.LedgerEntry",
+        "authority": "read_only"
+      },
+      "content_visibility": {
+        "source": "content_distribution_contract",
+        "authority": "read_only"
+      },
+      "membership_state": {
+        "source": "membership_relationships_contract",
+        "authority": "read_only"
+      },
+      "dispute_resolution": {
+        "authority": "authoritative_for_dispute_lifecycle"
+      }
+    },
+  
+    "dispute_entities": {
+      "DisputeCase": {
+        "description": "Top-level dispute record representing a claim about system behavior",
+        "fields": [
+          "dispute_id",
+          "dispute_type",
+          "initiator_id",
+          "subject_reference",
+          "created_at_utc",
+          "current_state"
+        ],
+        "state_values": [
+          "opened",
+          "under_review",
+          "awaiting_evidence",
+          "resolved",
+          "rejected",
+          "escalated"
+        ],
+        "rules": [
+          "Each dispute must reference a concrete subject",
+          "Dispute state transitions must be event-driven",
+          "Closed disputes must be immutable"
+        ]
+      },
+  
+      "DisputeEvent": {
+        "description": "Immutable event representing a dispute lifecycle transition",
+        "fields": [
+          "dispute_event_id",
+          "dispute_id",
+          "event_type",
+          "occurred_at_utc",
+          "actor_type"
+        ],
+        "event_types": [
+          "opened",
+          "evidence_submitted",
+          "review_started",
+          "resolution_proposed",
+          "resolved",
+          "rejected",
+          "escalated"
+        ],
+        "actor_types": [
+          "supporter",
+          "creator",
+          "support_agent",
+          "system"
+        ],
+        "rules": [
+          "Dispute events are immutable",
+          "Dispute events must be replayable",
+          "Dispute events must not mutate authoritative state"
+        ]
+      },
+  
+      "EvidenceArtifact": {
+        "description": "Evidence attached to a dispute",
+        "fields": [
+          "artifact_id",
+          "dispute_id",
+          "artifact_type",
+          "reference",
+          "submitted_at_utc"
+        ],
+        "artifact_types": [
+          "payment_record",
+          "access_snapshot",
+          "content_snapshot",
+          "conversation_log",
+          "external_document"
+        ],
+        "rules": [
+          "Evidence must reference immutable snapshots",
+          "Evidence must never be modified after submission"
+        ]
+      },
+  
+      "ResolutionDecision": {
+        "description": "Final human or automated decision for a dispute",
+        "fields": [
+          "decision_id",
+          "dispute_id",
+          "decision_type",
+          "decided_at_utc",
+          "decided_by"
+        ],
+        "decision_types": [
+          "refund_approved",
+          "refund_denied",
+          "access_issue_confirmed",
+          "no_issue_found",
+          "manual_adjustment_required"
+        ],
+        "rules": [
+          "Decisions must be explainable",
+          "Decisions must reference evidence",
+          "Decisions must emit system events, not perform mutations"
+        ]
+      }
+    },
+  
+    "resolution_flow": {
+      "trigger_sources": [
+        "supporter_request",
+        "creator_request",
+        "payment_provider_signal",
+        "system_detected_anomaly"
+      ],
+      "process": [
+        "Open dispute case",
+        "Snapshot relevant authoritative state",
+        "Collect evidence",
+        "Perform automated checks",
+        "Escalate to human if required",
+        "Emit resolution decision event"
+      ],
+      "rules": [
+        "Automated resolution must be deterministic",
+        "Human decisions must be traceable",
+        "Resolution must never rewrite history"
+      ]
+    },
+  
+    "integration_contracts": {
+      "on_refund_approved": {
+        "emit_event": "RefundApproved",
+        "handled_by": "creator_economy_contract"
+      },
+      "on_access_issue_confirmed": {
+        "emit_event": "AccessReconciliationRequested",
+        "handled_by": "core_subscription_contract"
+      },
+      "on_dispute_resolved": {
+        "emit_event": "DisputeResolved",
+        "handled_by": "notification_contract"
+      }
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Dispute cases are replayable",
+        "Dispute projections are rebuildable"
+      ],
+      "safety_rules": [
+        "Replay must not emit new resolution decisions",
+        "Replay must not trigger notifications or refunds"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Unresolvable disputes must escalate",
+        "SLA breaches must emit alerts",
+        "Stuck disputes require human intervention"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "open_dispute_count",
+        "average_resolution_time",
+        "escalation_rate",
+        "refund_dispute_rate"
+      ],
+      "alerts": [
+        "dispute_sla_breach",
+        "unresolved_dispute_growth"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Direct refund execution",
+      "Direct access granting",
+      "Direct content visibility changes",
+      "Financial reconciliation"
+    ],
+  
+    "production_guarantees": {
+      "auditability": true,
+      "human_decisions_traceable": true,
+      "replay_safe": true,
+      "no_history_rewrite": true
+    }
+  }
+  

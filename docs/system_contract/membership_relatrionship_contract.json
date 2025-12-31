@@ -1,0 +1,207 @@
+{
+    "contract_scope": {
+      "name": "membership_relationships_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [
+        "core_subscription_contract",
+        "content_distribution_contract"
+      ],
+      "allowed_changes": [
+        "new_relationship_states",
+        "new_loyalty_metrics",
+        "new_engagement_signals"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "payment_event_mutation",
+        "creator_earnings_logic",
+        "content_visibility_mutation"
+      ],
+      "rule": "This contract defines the supporter–creator relationship lifecycle and engagement semantics without mutating access, payment, or content authority."
+    },
+  
+    "architecture_principle": "relationship_timeline_with_derived_metrics",
+  
+    "purpose": "Model the long-term relationship between supporters and creators, including engagement, loyalty, pauses, and historical context.",
+  
+    "core_invariant": {
+      "rule": "Membership relationship state must always be explainable from subscription history and user actions.",
+      "failure_is": "relationship_consistency_violation"
+    },
+  
+    "authoritative_boundaries": {
+      "subscription_state": {
+        "source": "core_subscription_contract.Subscription",
+        "authority": "read_only"
+      },
+      "access_entitlement": {
+        "source": "core_subscription_contract.AccessEntitlement",
+        "authority": "read_only"
+      },
+      "content_events": {
+        "source": "content_distribution_contract",
+        "authority": "read_only"
+      },
+      "membership_relationships": {
+        "authority": "authoritative_for_relationship_state"
+      }
+    },
+  
+    "relationship_entities": {
+      "Membership": {
+        "description": "Logical relationship between a supporter and a creator",
+        "fields": [
+          "membership_id",
+          "supporter_id",
+          "creator_id",
+          "joined_at_utc",
+          "current_state"
+        ],
+        "state_values": [
+          "active",
+          "paused",
+          "cancelled",
+          "expired"
+        ],
+        "rules": [
+          "Membership state changes must be recorded as events",
+          "Membership state must not override subscription state",
+          "Paused membership does not imply cancelled subscription"
+        ]
+      },
+  
+      "MembershipEvent": {
+        "description": "Immutable event representing a relationship change",
+        "fields": [
+          "membership_event_id",
+          "membership_id",
+          "event_type",
+          "occurred_at_utc"
+        ],
+        "event_types": [
+          "joined",
+          "paused",
+          "resumed",
+          "cancelled",
+          "expired",
+          "rejoined"
+        ],
+        "rules": [
+          "Membership events are immutable",
+          "Events must be time-ordered",
+          "Events must be replayable"
+        ]
+      },
+  
+      "PausePolicy": {
+        "description": "Defines pause behavior for memberships",
+        "fields": [
+          "max_pause_duration_days",
+          "cooldown_period_days",
+          "effective_from_utc"
+        ],
+        "rules": [
+          "Pause policies must not mutate subscription access",
+          "Pause expiration must emit membership events"
+        ]
+      },
+  
+      "EngagementSignal": {
+        "description": "Observed supporter interaction with creator content",
+        "fields": [
+          "signal_id",
+          "membership_id",
+          "signal_type",
+          "occurred_at_utc"
+        ],
+        "signal_types": [
+          "content_viewed",
+          "comment_posted",
+          "reaction_added",
+          "message_sent"
+        ],
+        "rules": [
+          "Engagement signals are observational",
+          "Signals must never affect access or payment",
+          "Signals are used for analytics and recommendations only"
+        ]
+      }
+    },
+  
+    "derived_metrics": {
+      "LoyaltyMetrics": {
+        "description": "Derived indicators of supporter loyalty",
+        "metrics": [
+          "membership_duration_days",
+          "active_months",
+          "pause_frequency",
+          "churn_risk_score"
+        ],
+        "rules": [
+          "Metrics must be derived from immutable events",
+          "Metrics must be rebuildable",
+          "Metrics must not be used for access decisions"
+        ]
+      }
+    },
+  
+    "relationship_projection": {
+      "purpose": "Provide read-optimized views for CRM and creator dashboards",
+      "rules": [
+        "Projections are derived and rebuildable",
+        "Projection rebuilds must be replay-safe",
+        "Projections must never mutate authoritative state"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Relationship inconsistencies must emit alerts",
+        "Ambiguous relationship state must default to non-active",
+        "Human review is required for manual corrections"
+      ]
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Membership events are replayable",
+        "Relationship projections are rebuildable",
+        "Engagement signals are replay-safe"
+      ],
+      "safety_rules": [
+        "Replay must not trigger notifications",
+        "Replay must not alter access or payment state"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "active_membership_count",
+        "pause_rate",
+        "rejoin_rate",
+        "churn_rate",
+        "average_membership_duration"
+      ],
+      "alerts": [
+        "relationship_consistency_violation",
+        "projection_inconsistency_detected"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Subscription lifecycle decisions",
+      "Access control enforcement",
+      "Payment settlement",
+      "Content publication rules"
+    ],
+  
+    "production_guarantees": {
+      "event_sourced_relationships": true,
+      "replay_safe": true,
+      "auditability": true,
+      "no_authority_leakage": true
+    }
+  }
+  

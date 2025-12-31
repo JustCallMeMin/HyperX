@@ -1,0 +1,155 @@
+{
+    "guideline_scope": "implementation_and_operations",
+    "applies_to": [
+      "subscription_service",
+      "reconciliation_engine",
+      "payment_webhook_handler",
+      "access_entitlement_service",
+      "identity_service",
+      "notification_service",
+      "dispute_service"
+    ],
+  
+    "time_handling_guidelines": {
+      "principle": "absolute_time_over_relative_logic",
+      "rules": [
+        "All time values must be stored and processed as absolute UTC timestamps.",
+        "Relative concepts such as 'end_of_day' must never be evaluated at runtime.",
+        "Access entitlement must be represented as fixed start_at and expires_at timestamps."
+      ],
+      "implementation_requirements": [
+        "Use TIMESTAMP WITH TIME ZONE or UTC ISO-8601 for all persisted time fields.",
+        "Compute access_expires_at at event handling time, not during access checks.",
+        "Access checks must only compare now_utc against persisted expires_at."
+      ],
+      "forbidden_patterns": [
+        "if (now < end_of_day)",
+        "runtime timezone conversions",
+        "recomputing entitlement windows on read"
+      ]
+    },
+  
+    "payment_event_precedence_guidelines": {
+      "principle": "deterministic_precedence_over_event_order",
+      "precedence_order": [
+        "PaymentChargeback",
+        "PaymentRefunded",
+        "PaymentSucceeded"
+      ],
+      "rules": [
+        "Chargeback events always override refund and success outcomes.",
+        "Refund events override prior payment success but do not override chargebacks.",
+        "Event arrival order must never affect final access or subscription state."
+      ],
+      "implementation_requirements": [
+        "Reconciliation must evaluate the full event history, not only the latest event.",
+        "Chargeback handling must immediately revoke access regardless of refund grace logic.",
+        "Refund grace logic must be skipped if a chargeback exists for the same billing cycle."
+      ]
+    },
+  
+    "reconciliation_concurrency_guidelines": {
+      "principle": "version_based_idempotent_reconciliation",
+      "rules": [
+        "Reconciliation must be idempotent per subscription_id.",
+        "Only one reconciliation result may be applied per projection_version.",
+        "Concurrent reconciliation attempts must not emit duplicate system events."
+      ],
+      "implementation_requirements": [
+        "All reconciliation updates must use optimistic locking on projection_version.",
+        "Failed version updates must result in a no-op and safe retry.",
+        "Reconciliation processes must not rely on distributed locks."
+      ],
+      "sla_timer_rules": [
+        "The inconsistent_state SLA timer may only start once per inconsistent window.",
+        "Subsequent events during inconsistent state must not reset the SLA timer.",
+        "Only audit logging is permitted while inconsistent state is active."
+      ]
+    },
+  
+    "invariant_simulation_security_guidelines": {
+      "principle": "simulation_is_a_build_time_capability",
+      "rules": [
+        "Invariant simulation code must never be present in production binaries.",
+        "Simulation capabilities must be removed via build-time or dependency injection boundaries.",
+        "Runtime configuration flags alone are insufficient for simulation safety."
+      ],
+      "implementation_requirements": [
+        "Invariant simulation modules must only be compiled in dev or test builds.",
+        "Production builds must not reference or import simulation code paths.",
+        "Middleware must detect and block any simulation trigger attempts in production."
+      ],
+      "security_response": [
+        "Emit CRITICAL_SECURITY_ALERT on any detected simulation trigger in production.",
+        "Treat production simulation attempts as potential malicious interference."
+      ]
+    },
+  
+    "identity_and_external_provider_guidelines": {
+      "principle": "single_authoritative_identity_mapping",
+      "rules": [
+        "Mapping from external provider identifiers (e.g. stripe_customer_id) to internal user_id must occur only in identity_service.",
+        "No other service may infer, cache, or reconstruct identity mappings.",
+        "User account deletion must trigger external identity detachment."
+      ],
+      "implementation_requirements": [
+        "Identity service must be the single source of truth for authentication and external provider linkage.",
+        "Stripe customer references must never be stored outside identity_service.",
+        "Authentication and authorization checks must not depend on subscription or payment state."
+      ],
+      "forbidden_patterns": [
+        "Inferring user identity from payment or subscription records",
+        "Caching external identity mappings outside identity_service"
+      ]
+    },
+  
+    "notification_outbox_guidelines": {
+      "principle": "side_effect_isolation_with_idempotency",
+      "rules": [
+        "Notifications must be derived from events and must never mutate business state.",
+        "Each event may produce at most one notification per channel and recipient.",
+        "Notification delivery must be idempotent."
+      ],
+      "implementation_requirements": [
+        "Notification intent creation must be deduplicated by source_event_id.",
+        "External delivery must be executed via an outbox mechanism.",
+        "Delivery retries must not create duplicate user-visible messages."
+      ],
+      "replay_safety_rules": [
+        "Replay must never trigger notification delivery.",
+        "Outbox processing must be disabled during replay operations."
+      ]
+    },
+  
+    "dispute_orchestration_guidelines": {
+      "principle": "human_in_the_loop_without_authority_mutation",
+      "rules": [
+        "Dispute services must never mutate subscription, access, or financial state.",
+        "Dispute outcomes must emit intent events rather than performing actions.",
+        "Human decisions must be traceable and auditable."
+      ],
+      "implementation_requirements": [
+        "Evidence used in disputes must reference immutable snapshots.",
+        "Automated dispute resolution must be deterministic.",
+        "Escalation paths must be explicit and SLA-bound."
+      ],
+      "forbidden_patterns": [
+        "Direct refund execution inside dispute service",
+        "Direct access modification inside dispute service"
+      ]
+    },
+  
+    "review_and_enforcement": {
+      "mandatory_for": [
+        "code_review",
+        "incident_response",
+        "on_call_runbooks"
+      ],
+      "violation_handling": [
+        "Block merge if forbidden patterns are detected.",
+        "Require explicit justification for any deviation.",
+        "Log and track guideline violations as technical debt."
+      ]
+    }
+  }
+  

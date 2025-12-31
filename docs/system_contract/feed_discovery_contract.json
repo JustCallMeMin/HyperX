@@ -1,0 +1,180 @@
+{
+    "contract_scope": {
+      "name": "feed_discovery_contract",
+      "status": "active",
+      "authoritative": false,
+      "depends_on": [
+        "content_distribution_contract",
+        "membership_relationships_contract"
+      ],
+      "allowed_changes": [
+        "new_ranking_algorithms",
+        "new_feed_types",
+        "new_discovery_signals"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "payment_event_mutation",
+        "creator_earnings_logic",
+        "content_visibility_mutation",
+        "membership_state_mutation"
+      ],
+      "rule": "This contract provides feed ordering and discovery as a non-authoritative, UX-only concern and must never influence access, payment, or content authority."
+    },
+  
+    "architecture_principle": "read_only_ranking_and_projection",
+  
+    "purpose": "Provide personalized and global feeds by ranking and projecting visible content without mutating authoritative state.",
+  
+    "core_invariant": {
+      "rule": "Feed ordering must never expose content that violates visibility or access rules.",
+      "failure_is": "feed_visibility_leak"
+    },
+  
+    "authoritative_boundaries": {
+      "content_distribution": {
+        "source": "content_distribution_contract",
+        "authority": "read_only"
+      },
+      "membership_relationships": {
+        "source": "membership_relationships_contract",
+        "authority": "read_only"
+      },
+      "feed_discovery": {
+        "authority": "authoritative_for_ranking_only"
+      }
+    },
+  
+    "feed_entities": {
+      "FeedItem": {
+        "description": "A ranked feed entry referencing visible content",
+        "fields": [
+          "feed_item_id",
+          "content_id",
+          "creator_id",
+          "rank_score",
+          "feed_type",
+          "computed_at_utc"
+        ],
+        "rules": [
+          "Feed items reference content but do not own it",
+          "Rank score must be explainable",
+          "Feed items are ephemeral and rebuildable"
+        ]
+      },
+  
+      "FeedType": {
+        "description": "Logical feed category",
+        "values": [
+          "home",
+          "creator_profile",
+          "discover",
+          "trending",
+          "recent"
+        ],
+        "rules": [
+          "Feed type must not change access rules",
+          "Feed type determines ranking strategy only"
+        ]
+      },
+  
+      "DiscoverySignal": {
+        "description": "Observed signal used for ranking and discovery",
+        "fields": [
+          "signal_id",
+          "content_id",
+          "signal_type",
+          "occurred_at_utc"
+        ],
+        "signal_types": [
+          "view",
+          "like",
+          "comment",
+          "share",
+          "follow",
+          "watch_time"
+        ],
+        "rules": [
+          "Discovery signals are observational",
+          "Signals must never mutate authoritative state",
+          "Signals may be sampled or aggregated"
+        ]
+      }
+    },
+  
+    "ranking_engine": {
+      "inputs": [
+        "visible_content",
+        "membership_relationships",
+        "discovery_signals"
+      ],
+      "process": [
+        "Filter content by visibility",
+        "Apply feed-specific ranking strategy",
+        "Compute rank score",
+        "Generate feed projection"
+      ],
+      "rules": [
+        "Ranking must be deterministic per input set",
+        "Ranking must be explainable",
+        "Ranking must degrade gracefully on missing signals"
+      ]
+    },
+  
+    "feed_projection": {
+      "rules": [
+        "Feed projections are derived and rebuildable",
+        "Projections must be cacheable",
+        "Projection rebuilds must be replay-safe"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Feed visibility leaks must emit alerts",
+        "Ranking failures must fall back to safe ordering",
+        "Human review is required for ranking anomalies"
+      ]
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Feed projections are rebuildable",
+        "Ranking recomputation is replay-safe"
+      ],
+      "safety_rules": [
+        "Replay must never expose restricted content",
+        "Replay must not trigger notifications"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "feed_load_latency",
+        "content_exposure_rate",
+        "ranking_computation_time",
+        "visibility_violation_count"
+      ],
+      "alerts": [
+        "feed_visibility_leak",
+        "ranking_pipeline_failure"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Access control enforcement",
+      "Payment or payout logic",
+      "Content publication",
+      "Relationship state changes",
+      "Notification delivery"
+    ],
+  
+    "production_guarantees": {
+      "read_only": true,
+      "replay_safe": true,
+      "cache_friendly": true,
+      "no_authority_leakage": true
+    }
+  }
+  

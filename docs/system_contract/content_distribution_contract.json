@@ -1,0 +1,238 @@
+{
+    "contract_scope": {
+      "name": "creator_economy_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [
+        "core_subscription_contract"
+      ],
+      "allowed_changes": [
+        "new_settlement_channels",
+        "new_fee_policies",
+        "regulatory_compliance_updates",
+        "settlement_visibility_extensions"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "payment_event_mutation",
+        "historical_ledger_rewrites"
+      ],
+      "rule": "This contract defines financial correctness for creator earnings and payouts and must not mutate subscription or access state."
+    },
+  
+    "architecture_principle": "ledger_first_creator_accounting",
+  
+    "purpose": "Manage creator earnings, platform fees, settlement visibility, and payouts derived from successful payments without mutating subscription or access state.",
+  
+    "core_invariant": {
+      "rule": "Every successful payment must eventually be reflected in creator earnings minus platform fees, or be explicitly marked as unrecoverable.",
+      "failure_is": "financial_integrity_violation"
+    },
+  
+    "authoritative_boundaries": {
+      "payment_events": {
+        "source": "core_subscription_contract.PaymentEvent",
+        "authority": "read_only"
+      },
+      "access_entitlement": {
+        "source": "core_subscription_contract.AccessEntitlement",
+        "authority": "read_only"
+      },
+      "creator_economy": {
+        "authority": "authoritative_for_financial_state"
+      }
+    },
+  
+    "financial_entities": {
+      "CreatorWallet": {
+        "description": "Derived balance snapshot per creator",
+        "fields": [
+          "creator_id",
+          "available_balance",
+          "pending_balance",
+          "currency",
+          "last_updated_at_utc"
+        ],
+        "rules": [
+          "Wallet balance is derived from ledger entries",
+          "Wallet balance must never be updated directly",
+          "Wallet balance must be fully recalculable from ledger history"
+        ]
+      },
+  
+      "LedgerEntry": {
+        "description": "Immutable creator earnings and payout record",
+        "fields": [
+          "ledger_entry_id",
+          "creator_id",
+          "source_event_id",
+          "entry_type",
+          "amount",
+          "currency",
+          "occurred_at_utc"
+        ],
+        "entry_types": [
+          "payment_credit",
+          "platform_fee",
+          "refund_debit",
+          "chargeback_debit",
+          "payout_debit",
+          "adjustment_credit",
+          "adjustment_debit"
+        ],
+        "rules": [
+          "Ledger entries are immutable",
+          "Ledger entries must reference a source payment event",
+          "Ledger represents creator-facing financial truth"
+        ]
+      },
+  
+      "SettlementRecord": {
+        "description": "Operational settlement visibility per payment event",
+        "fields": [
+          "payment_event_id",
+          "creator_id",
+          "settlement_status",
+          "settled_at_utc",
+          "note"
+        ],
+        "status_values": [
+          "pending",
+          "settled",
+          "unrecoverable"
+        ],
+        "rules": [
+          "SettlementRecord is derived from ledger state",
+          "SettlementRecord must not mutate ledger history",
+          "SettlementRecord exists for support, ops, and creator visibility"
+        ]
+      },
+  
+      "PlatformFeePolicy": {
+        "description": "Defines how platform fees are calculated",
+        "fields": [
+          "policy_id",
+          "fee_percentage",
+          "flat_fee",
+          "effective_from_utc",
+          "effective_to_utc"
+        ],
+        "rules": [
+          "Fee policy changes must not rewrite historical ledger entries",
+          "Applied fee parameters must be snapshotted at settlement time"
+        ]
+      },
+  
+      "AppliedFeeSnapshot": {
+        "description": "Explicit snapshot of platform fee applied to a payment",
+        "fields": [
+          "payment_event_id",
+          "policy_id_used",
+          "fee_percentage_used",
+          "flat_fee_used",
+          "applied_at_utc"
+        ],
+        "rules": [
+          "Fee snapshot is immutable",
+          "Fee snapshot is used for audit and creator transparency"
+        ]
+      },
+  
+      "PayoutBatch": {
+        "description": "Scheduled creator payout execution unit",
+        "fields": [
+          "payout_batch_id",
+          "currency",
+          "scheduled_at_utc",
+          "executed_at_utc",
+          "status"
+        ],
+        "status_values": [
+          "scheduled",
+          "processing",
+          "completed",
+          "failed",
+          "partially_completed"
+        ],
+        "rules": [
+          "Payout batches must be idempotent",
+          "Failed payouts must not affect ledger integrity"
+        ]
+      }
+    },
+  
+    "settlement_flow": {
+      "trigger_events": [
+        "PaymentSucceeded",
+        "PaymentRefunded",
+        "PaymentChargeback"
+      ],
+      "process": [
+        "Read immutable payment event",
+        "Determine applicable platform fee policy",
+        "Emit immutable ledger entries",
+        "Update wallet projection",
+        "Update settlement visibility"
+      ],
+      "rules": [
+        "Settlement must be idempotent per payment event",
+        "Chargebacks override refunds",
+        "Settlement outcome must not depend on event arrival order"
+      ]
+    },
+  
+    "negative_balance_handling": {
+      "principle": "creator_platform_safe_guard",
+      "rules": [
+        "Negative creator balances must be tracked explicitly",
+        "Creators with negative balance must not receive payouts",
+        "Negative balances require manual review and resolution",
+        "Negative balance resolution must be auditable"
+      ]
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Ledger entries are replayable",
+        "Wallet balances are recomputed from ledger",
+        "Settlement records are recomputed from ledger",
+        "External payouts are never re-triggered on replay"
+      ],
+      "safety_rules": [
+        "Replay must never trigger bank transfers",
+        "Replay must not change payout execution state"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "creator_gross_earnings",
+        "platform_fee_total",
+        "pending_payout_amount",
+        "unsettled_payment_count",
+        "negative_balance_count"
+      ],
+      "alerts": [
+        "settlement_failure",
+        "payout_batch_failure",
+        "ledger_inconsistency_detected"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Access control decisions",
+      "Subscription lifecycle management",
+      "Content visibility logic",
+      "Banking or payment processor responsibilities"
+    ],
+  
+    "production_guarantees": {
+      "ledger_immutability": true,
+      "replay_safe": true,
+      "idempotent_settlement": true,
+      "auditability": true,
+      "creator_transparency_ready": true
+    }
+  }
+  

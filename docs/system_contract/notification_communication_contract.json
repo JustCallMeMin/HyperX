@@ -1,0 +1,197 @@
+{
+    "contract_scope": {
+      "name": "notification_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [
+        "core_subscription_contract",
+        "creator_economy_contract",
+        "content_distribution_contract",
+        "membership_relationships_contract"
+      ],
+      "allowed_changes": [
+        "new_notification_channels",
+        "new_message_templates",
+        "new_delivery_providers"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "payment_event_mutation",
+        "creator_earnings_logic",
+        "content_visibility_mutation",
+        "relationship_state_mutation"
+      ],
+      "rule": "This contract defines notification delivery as a side-effect-only concern and must never mutate business or financial state."
+    },
+  
+    "architecture_principle": "event_consuming_side_effect_outbox",
+  
+    "purpose": "Deliver user-facing communications derived from system and business events in a replay-safe, idempotent, and auditable manner.",
+  
+    "core_invariant": {
+      "rule": "Each eligible event may result in at most one external notification per channel and recipient.",
+      "failure_is": "notification_duplication_or_loss"
+    },
+  
+    "authoritative_boundaries": {
+      "events": {
+        "source": "system_and_business_events",
+        "authority": "read_only"
+      },
+      "notification_contract": {
+        "authority": "authoritative_for_delivery_state"
+      }
+    },
+  
+    "notification_entities": {
+      "NotificationIntent": {
+        "description": "Logical intent to notify a recipient derived from an event",
+        "fields": [
+          "intent_id",
+          "source_event_id",
+          "recipient_id",
+          "notification_type",
+          "created_at_utc"
+        ],
+        "rules": [
+          "Each intent must reference exactly one source event",
+          "Intent creation must be idempotent per event and recipient",
+          "Intent must not imply delivery"
+        ]
+      },
+  
+      "NotificationTemplate": {
+        "description": "Message template for a specific notification type and channel",
+        "fields": [
+          "template_id",
+          "notification_type",
+          "channel",
+          "locale",
+          "version"
+        ],
+        "rules": [
+          "Templates must be versioned",
+          "Template changes must not affect previously sent messages"
+        ]
+      },
+  
+      "NotificationOutbox": {
+        "description": "Outbox record representing a delivery attempt request",
+        "fields": [
+          "outbox_id",
+          "intent_id",
+          "channel",
+          "provider",
+          "created_at_utc",
+          "status"
+        ],
+        "status_values": [
+          "pending",
+          "processing",
+          "sent",
+          "failed",
+          "discarded"
+        ],
+        "rules": [
+          "Outbox entries are append-only",
+          "Outbox entries must be deduplicated by intent_id and channel",
+          "Outbox entries must survive retries and crashes"
+        ]
+      },
+  
+      "DeliveryAttempt": {
+        "description": "Individual attempt to deliver a notification",
+        "fields": [
+          "attempt_id",
+          "outbox_id",
+          "provider_response",
+          "attempted_at_utc",
+          "success"
+        ],
+        "rules": [
+          "Delivery attempts are immutable",
+          "Multiple attempts may exist per outbox entry",
+          "Attempts must not duplicate user-visible messages"
+        ]
+      }
+    },
+  
+    "notification_flow": {
+      "trigger_events": [
+        "AccessGranted",
+        "AccessRevoked",
+        "PaymentFailed",
+        "PaymentRefunded",
+        "PaymentChargeback",
+        "PayoutCompleted",
+        "MembershipPaused",
+        "MembershipCancelled",
+        "NewContentPublished"
+      ],
+      "process": [
+        "Consume immutable event",
+        "Evaluate notification eligibility",
+        "Create NotificationIntent",
+        "Render message from template",
+        "Write NotificationOutbox entry",
+        "Execute delivery via provider",
+        "Record DeliveryAttempt"
+      ],
+      "rules": [
+        "Notification creation must be idempotent",
+        "Delivery retries must not duplicate messages",
+        "Delivery failures must not block core processing"
+      ]
+    },
+  
+    "replay_and_idempotency": {
+      "replay_behavior": [
+        "Replaying events must not create duplicate NotificationIntent",
+        "Outbox entries must be deduplicated using source_event_id",
+        "Delivery must not re-execute on replay"
+      ],
+      "safety_rules": [
+        "Replay must never send external notifications",
+        "Delivery execution must be explicitly separated from replay logic"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Permanent delivery failures must mark outbox entry as failed",
+        "Transient failures may retry with backoff",
+        "Failed notifications must be auditable"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "notifications_sent",
+        "delivery_failure_rate",
+        "retry_count",
+        "notification_latency"
+      ],
+      "alerts": [
+        "notification_delivery_failure_spike",
+        "outbox_backlog_growth",
+        "provider_error_rate_high"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Business decision making",
+      "Access control enforcement",
+      "Financial settlement",
+      "Content publication",
+      "Relationship state changes"
+    ],
+  
+    "production_guarantees": {
+      "idempotent_delivery": true,
+      "replay_safe": true,
+      "auditability": true,
+      "side_effect_isolation": true
+    }
+  }
+  

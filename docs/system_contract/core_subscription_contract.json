@@ -1,0 +1,296 @@
+{
+  "contract_scope": {
+    "name": "core_subscription_contract",
+    "status": "active",
+    "authoritative": true,
+    "allowed_changes": [
+      "bug_fixes",
+      "clarifications_without_semantic_change"
+    ],
+    "forbidden_changes": [
+      "creator_economy_logic",
+      "content_distribution_logic",
+      "payout_rules",
+      "analytics_projections",
+      "product_features"
+    ],
+    "rule": "This contract defines subscription correctness and must not be extended with product concerns."
+  },
+
+  "product": {
+    "name": "Creator Membership Platform",
+    "core_model": "subscription_based_membership",
+    "inspiration": "Patreon-like (original implementation)"
+  },
+
+  "architecture_principle": "event_sourced_core_with_bounded_contexts",
+
+  "core_contract": {
+    "frozen": true,
+    "authoritative_context": "subscription_consistency",
+    "rule": "The core contract defines correctness and must never be mutated by peripheral contexts."
+  },
+
+  "system_invariants": {
+    "subscription_consistency": [
+      "payment_status",
+      "subscription_state",
+      "access_entitlement"
+    ],
+    "rule": "Payment status, subscription state, and access entitlement must never conflict. Any violation must be detected, recorded, and reconciled."
+  },
+
+  "external_state_authority": {
+    "payment_provider": "authoritative",
+    "internal_database": "derived_projection"
+  },
+
+  "subscription_state_machine": {
+    "states": [
+      "active",
+      "past_due",
+      "grace_period",
+      "cancelled",
+      "expired",
+      "inconsistent"
+    ],
+    "access_allowed_states": [
+      "active",
+      "grace_period"
+    ],
+    "terminal_states": [
+      "expired"
+    ]
+  },
+
+  "authoritative_resolution_policy": {
+    "payment_facts": {
+      "source_of_truth": "payment_provider"
+    },
+    "access_entitlement": {
+      "source_of_truth": "internal_reconciled_state",
+      "rule": "Access may only change after reconciliation completes and invariants are restored."
+    },
+    "conflict_handling": {
+      "on_detection": [
+        "mark_state_inconsistent",
+        "trigger_reconciliation",
+        "preserve_current_access"
+      ]
+    },
+    "tier_transition_policy": {
+      "transition_type": [
+        "upgrade",
+        "downgrade"
+      ],
+      "billing_handling": "prorated",
+      "access_rule": "highest_active_tier",
+      "rules": [
+        "Tier transitions must be treated as atomic events.",
+        "During a prorated billing window, access entitlement must reflect the highest active tier.",
+        "Access must never downgrade mid-cycle due to billing proration.",
+        "Final tier alignment occurs at the next billing cycle boundary."
+      ]
+    },
+    "refund_and_chargeback_policy": {
+      "event_nature": "retroactive_fact",
+      "rules": [
+        "Refunds and chargebacks retroactively invalidate prior PaymentSucceeded events."
+      ],
+      "refund_handling": {
+        "subscription_state_transition": "cancelled",
+        "access_handling": "allow_until_end_of_access_window",
+        "rules": [
+          "Refunds do not immediately revoke access.",
+          "Access may persist until the current entitlement window expires.",
+          "Final access revocation occurs after reconciliation."
+        ]
+      },
+      "chargeback_handling": {
+        "subscription_state_transition": "cancelled",
+        "access_handling": "immediate_revoke",
+        "rules": [
+          "Chargebacks must immediately revoke access.",
+          "Chargebacks bypass grace periods.",
+          "Human review is required for any manual restoration."
+        ]
+      }
+    }
+  },
+
+  "event_model": {
+    "business_events": [
+      "SubscriptionCreated",
+      "SubscriptionRenewed",
+      "SubscriptionCancelled",
+      "PaymentSucceeded",
+      "PaymentFailed",
+      "PaymentRefunded",
+      "PaymentChargeback",
+      "GracePeriodStarted"
+    ],
+    "system_events": [
+      "AccessGranted",
+      "AccessRevoked",
+      "RetryScheduled",
+      "NotificationSent",
+      "ReconciliationTriggered",
+      "HumanInterventionRequired",
+      "InvariantViolated",
+      "InvariantRestored",
+      "InconsistentStateTimeout"
+    ],
+    "rules": [
+      "Business events are immutable facts.",
+      "System events are reactions and replayable.",
+      "System events must never create new business facts."
+    ]
+  },
+
+  "event_versioning_policy": {
+    "event_type_is": "stable",
+    "payload_versioning": "required",
+    "schema_version_field": "schema_version",
+    "consumer_requirements": [
+      "must_support_current_version",
+      "must_support_two_previous_versions"
+    ]
+  },
+
+  "event_safety_policy": {
+    "max_event_chain_depth": 3,
+    "required_metadata": [
+      "event_id",
+      "causation_id",
+      "origin_event_type"
+    ],
+    "rules": [
+      "System events must not cascade indefinitely.",
+      "Error-related events must never auto-fanout."
+    ]
+  },
+
+  "concurrency_control_policy": {
+    "strategy": "optimistic_locking",
+    "lock_scope": "subscription_projection",
+    "version_field": "projection_version",
+    "rules": [
+      "Conflicting events may be processed concurrently but applied sequentially.",
+      "Version conflicts trigger retry with refreshed state.",
+      "Distributed locks are forbidden for subscription and payment flows."
+    ]
+  },
+
+  "invariant_detection_policy": {
+    "evaluation_timing": "after_each_event_application",
+    "on_violation": [
+      "emit InvariantViolated",
+      "mark_state_inconsistent",
+      "halt_non_reconciliation_automation"
+    ]
+  },
+
+  "inconsistent_state_policy": {
+    "allowed_operations": [
+      "state_reconciliation",
+      "audit_log_read",
+      "human_intervention_workflow",
+      "observability"
+    ],
+    "forbidden_operations": [
+      "access_granting",
+      "access_revocation",
+      "payment_retry",
+      "subscription_cancellation",
+      "automation_side_effects"
+    ],
+    "exit_conditions": [
+      "InvariantRestored"
+    ]
+  },
+
+  "recovery_validation_policy": {
+    "success_criteria": [
+      "all_invariants_hold",
+      "payment_provider_state_matches_internal_projection",
+      "no_pending_conflicting_events"
+    ],
+    "stability_window_required": true,
+    "recovery_event": "InvariantRestored",
+    "inconsistent_state_sla_policy": {
+      "max_duration": "4h",
+      "on_expiry": [
+        "auto_transition_to_grace_period",
+        "emit InconsistentStateTimeout",
+        "alert_on_call_engineer"
+      ],
+      "rules": [
+        "Inconsistent state must not block user access indefinitely.",
+        "After SLA expiry, the system must fail safe to grace_period.",
+        "Human intervention remains required for final resolution."
+      ]
+    }
+  },
+
+  "state_reconciliation": {
+    "triggers": [
+      "payment_provider_webhook",
+      "scheduled_reconciliation_job",
+      "manual_support_check"
+    ],
+    "rule": "Reconciliation emits compensating events only. Historical data is never mutated."
+  },
+
+  "webhook_handling_policy": {
+    "webhooks_are": "external_signals",
+    "requirements": [
+      "idempotent",
+      "validated_against_provider_api",
+      "order_independent"
+    ],
+    "prohibitions": [
+      "direct_state_mutation",
+      "direct_access_changes"
+    ]
+  },
+
+  "idempotency_policy": {
+    "applies_to": [
+      "webhook_handlers",
+      "automation_rules",
+      "background_jobs",
+      "access_granting",
+      "access_revocation"
+    ],
+    "external_side_effect_policy": {
+      "applies_to": [
+        "email_notifications",
+        "webhooks",
+        "third_party_calls"
+      ],
+      "deduplication_key": "event_id",
+      "rules": [
+        "External side effects must be deduplicated using event_id.",
+        "System replays must never trigger duplicate external deliveries.",
+        "Internal state replay is allowed; external execution must be guarded."
+      ]
+    }
+  },
+
+  "applications": {
+    "public_website": {
+      "principle": "UI reflects derived state only."
+    },
+    "admin_crm": {
+      "principle": "All decisions must be explainable via event timeline."
+    }
+  },
+
+  "production_guarantees": {
+    "deterministic_reconciliation": true,
+    "replay_safe": true,
+    "no_distributed_locks": true,
+    "auditability": true,
+    "human_actions_traceable": true
+  }
+}
