@@ -1,0 +1,1021 @@
+// ============================================================
+// Identity Access Schema
+// Implements: identity_access_contract
+// Scope: Authentication context & authorization resolution ONLY
+// ============================================================
+
+Table identities {
+  identity_id uuid [pk]
+  identity_type varchar // user | service | support_agent
+  provider varchar // local | google | apple | github | stripe | system
+  provider_subject varchar // external subject / user id from provider
+  status varchar // active | suspended | revoked
+  created_at_utc timestamp
+
+  Indexes {
+    (provider, provider_subject) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Principals represent "who the identity is acting as"
+// ------------------------------------------------------------
+Table principals {
+  principal_id uuid [pk]
+  identity_id uuid
+  principal_type varchar // supporter | creator | creator_team_member | admin
+  scope varchar // global | creator:{creator_id}
+  created_at_utc timestamp
+}
+
+// ------------------------------------------------------------
+// Role assignments are coarse, additive permissions
+// ------------------------------------------------------------
+Table role_assignments {
+  principal_id uuid
+  role varchar // viewer | supporter | creator_owner | creator_editor | admin
+  scope varchar // global | creator:{creator_id}
+  granted_at_utc timestamp
+
+  Indexes {
+    (principal_id, role, scope) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Session context is runtime authentication only
+// Sessions are NOT replayable
+// ------------------------------------------------------------
+Table session_contexts {
+  session_id uuid [pk]
+  identity_id uuid
+  principal_id uuid
+  issued_at_utc timestamp
+  expires_at_utc timestamp
+  revoked_at_utc timestamp
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: principals.identity_id > identities.identity_id
+Ref: role_assignments.principal_id > principals.principal_id
+Ref: session_contexts.identity_id > identities.identity_id
+Ref: session_contexts.principal_id > principals.principal_id
+
+
+// ============================================================
+// Core Subscription Schema
+// Implements: core_subscription_contract
+// Authority: Subscription correctness & access entitlement
+// External authority: Payment Provider (Stripe)
+// ============================================================
+
+Table subscriptions {
+  subscription_id uuid [pk]
+  supporter_identity_id uuid
+  creator_identity_id uuid
+
+  current_tier_id uuid
+  state varchar // active | past_due | grace_period | cancelled | expired | inconsistent
+
+  started_at_utc timestamp
+  current_period_start_utc timestamp
+  current_period_end_utc timestamp
+
+  cancel_at_period_end boolean
+  cancelled_at_utc timestamp
+
+  projection_version int
+  updated_at_utc timestamp
+
+  Note: "One row = current derived state (projection)"
+}
+
+// ------------------------------------------------------------
+// Tier definition snapshot (pricing & access intent)
+// ------------------------------------------------------------
+Table subscription_tiers {
+  tier_id uuid [pk]
+  creator_identity_id uuid
+
+  tier_name varchar
+  billing_interval varchar // monthly | yearly
+  price_amount_cents int
+  currency varchar
+
+  created_at_utc timestamp
+  archived_at_utc timestamp
+
+  Note: "Tier changes never rewrite history"
+}
+
+// ------------------------------------------------------------
+// Immutable billing cycle boundaries
+// ------------------------------------------------------------
+Table billing_cycles {
+  billing_cycle_id uuid [pk]
+  subscription_id uuid
+
+  cycle_start_utc timestamp
+  cycle_end_utc timestamp
+
+  created_at_utc timestamp
+}
+
+// ------------------------------------------------------------
+// Payment attempts (operational, retryable)
+// ------------------------------------------------------------
+Table payment_attempts {
+  payment_attempt_id uuid [pk]
+  subscription_id uuid
+
+  provider varchar // stripe
+  provider_payment_intent_id varchar
+
+  attempt_number int
+  amount_cents int
+  currency varchar
+
+  attempted_at_utc timestamp
+  status varchar // succeeded | failed | pending
+
+  failure_reason varchar
+}
+
+// ------------------------------------------------------------
+// Immutable payment facts (authoritative events)
+// ------------------------------------------------------------
+Table payment_events {
+  payment_event_id uuid [pk]
+  subscription_id uuid
+
+  provider varchar // stripe
+  provider_event_id varchar
+
+  event_type varchar
+  // PaymentSucceeded | PaymentFailed | PaymentRefunded | PaymentChargeback
+
+  amount_cents int
+  currency varchar
+
+  occurred_at_utc timestamp
+
+  Note: "Immutable business facts from provider"
+  
+  Indexes {
+    (provider, provider_event_id) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Access entitlement (derived, absolute time window)
+// ------------------------------------------------------------
+Table access_entitlements {
+  entitlement_id uuid [pk]
+  subscription_id uuid
+
+  tier_id uuid
+  access_start_utc timestamp
+  access_end_utc timestamp
+
+  granted_by_event_id uuid
+  revoked_by_event_id uuid
+
+  created_at_utc timestamp
+
+  Note: "Access is time-bounded and replayable"
+}
+
+// ------------------------------------------------------------
+// Reconciliation runs (detect & repair inconsistencies)
+// ------------------------------------------------------------
+Table reconciliation_runs {
+  reconciliation_id uuid [pk]
+  subscription_id uuid
+
+  triggered_by varchar // webhook | scheduled | manual
+  status varchar // running | resolved | failed
+
+  started_at_utc timestamp
+  completed_at_utc timestamp
+
+  Note: "Used for invariant detection & recovery"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: subscriptions.supporter_identity_id > identities.identity_id
+Ref: subscriptions.creator_identity_id > identities.identity_id
+
+Ref: billing_cycles.subscription_id > subscriptions.subscription_id
+Ref: payment_attempts.subscription_id > subscriptions.subscription_id
+Ref: payment_events.subscription_id > subscriptions.subscription_id
+Ref: access_entitlements.subscription_id > subscriptions.subscription_id
+Ref: reconciliation_runs.subscription_id > subscriptions.subscription_id
+
+Ref: access_entitlements.tier_id > subscription_tiers.tier_id
+Ref: subscriptions.current_tier_id > subscription_tiers.tier_id
+
+// ============================================================
+// Content Distribution Schema
+// Implements: content_distribution_contract
+// Authority: Content publication & visibility resolution
+// Consumes: AccessEntitlement (read-only)
+// ============================================================
+
+Table creator_content {
+  content_id uuid [pk]
+  creator_identity_id uuid
+
+  content_type varchar
+  status varchar // draft | scheduled | published | archived
+
+  created_at_utc timestamp
+  published_at_utc timestamp
+  archived_at_utc timestamp
+
+  Note: "Logical content unit; owns publication lifecycle only"
+}
+
+// ------------------------------------------------------------
+// Assets belonging to content (media, files, payloads)
+// ------------------------------------------------------------
+Table content_assets {
+  asset_id uuid [pk]
+  content_id uuid
+
+  asset_type varchar // video | image | audio | file | text
+  storage_reference varchar
+
+  created_at_utc timestamp
+
+  Note: "Assets inherit visibility from parent content"
+}
+
+// ------------------------------------------------------------
+// Visibility policy attached to content
+// ------------------------------------------------------------
+Table visibility_policies {
+  policy_id uuid [pk]
+  content_id uuid
+
+  visibility_type varchar
+  // public | members_only | tier_gated | creator_only
+
+  effective_from_utc timestamp
+
+  Note: "Policies are declarative and time-aware"
+}
+
+// ------------------------------------------------------------
+// Tier gate rules (only when visibility_type = tier_gated)
+// ------------------------------------------------------------
+Table tier_gate_rules {
+  tier_gate_rule_id uuid [pk]
+  policy_id uuid
+
+  tier_id uuid
+  minimum_required boolean
+
+  effective_from_utc timestamp
+
+  Note: "Consumes tier_id from subscription contract"
+}
+
+// ------------------------------------------------------------
+// Access resolution log (optional but recommended)
+// ------------------------------------------------------------
+Table access_resolution_logs {
+  resolution_id uuid [pk]
+  content_id uuid
+  principal_id uuid
+
+  resolution_result varchar // granted | denied
+  reason varchar // no_entitlement | tier_mismatch | unpublished
+
+  resolved_at_utc timestamp
+
+  Note: "Observability only; never used for decisions"
+}
+
+// ------------------------------------------------------------
+// Content projection (read-optimized, rebuildable)
+// ------------------------------------------------------------
+Table content_visibility_projections {
+  projection_id uuid [pk]
+  content_id uuid
+  principal_id uuid
+
+  is_visible boolean
+  computed_at_utc timestamp
+
+  Note: "Derived cache; safe to rebuild"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: content_assets.content_id > creator_content.content_id
+Ref: visibility_policies.content_id > creator_content.content_id
+Ref: tier_gate_rules.policy_id > visibility_policies.policy_id
+
+Ref: creator_content.creator_identity_id > identities.identity_id
+Ref: tier_gate_rules.tier_id > subscription_tiers.tier_id
+
+Ref: access_resolution_logs.principal_id > principals.principal_id
+Ref: content_visibility_projections.principal_id > principals.principal_id
+
+// ============================================================
+// Creator Economy Schema
+// Implements: creator_economy_contract
+// Authority: Financial correctness & creator earnings
+// Ledger-first, immutable, replay-safe
+// ============================================================
+
+// ------------------------------------------------------------
+// Immutable ledger entries (financial truth)
+// ------------------------------------------------------------
+Table ledger_entries {
+  ledger_entry_id uuid [pk]
+
+  creator_identity_id uuid
+  source_payment_event_id uuid
+
+  entry_type varchar
+  // payment_credit | platform_fee | refund_debit | chargeback_debit
+  // payout_debit | adjustment_credit | adjustment_debit
+
+  amount_cents int
+  currency varchar
+
+  occurred_at_utc timestamp
+
+  Note: "Ledger entries are immutable and authoritative"
+}
+
+// ------------------------------------------------------------
+// Wallet projection (derived, never directly mutated)
+// ------------------------------------------------------------
+Table creator_wallets {
+  creator_identity_id uuid [pk]
+
+  available_balance_cents int
+  pending_balance_cents int
+  currency varchar
+
+  last_computed_at_utc timestamp
+
+  Note: "Derived from ledger_entries; rebuildable"
+}
+
+// ------------------------------------------------------------
+// Settlement visibility per payment event
+// ------------------------------------------------------------
+Table settlement_records {
+  settlement_record_id uuid [pk]
+
+  payment_event_id uuid
+  creator_identity_id uuid
+
+  settlement_status varchar
+  // pending | settled | unrecoverable
+
+  settled_at_utc timestamp
+  note varchar
+
+  Note: "Operational visibility only; derived from ledger"
+}
+
+// ------------------------------------------------------------
+// Platform fee policies (versioned, time-bound)
+// ------------------------------------------------------------
+Table platform_fee_policies {
+  policy_id uuid [pk]
+
+  fee_percentage decimal
+  flat_fee_cents int
+
+  effective_from_utc timestamp
+  effective_to_utc timestamp
+
+  Note: "Policy changes never rewrite history"
+}
+
+// ------------------------------------------------------------
+// Applied fee snapshot (immutable audit record)
+// ------------------------------------------------------------
+Table applied_fee_snapshots {
+  snapshot_id uuid [pk]
+
+  payment_event_id uuid
+  policy_id_used uuid
+
+  fee_percentage_used decimal
+  flat_fee_used_cents int
+
+  applied_at_utc timestamp
+
+  Note: "Exact fee parameters used for this payment"
+}
+
+// ------------------------------------------------------------
+// Payout execution batches
+// ------------------------------------------------------------
+Table payout_batches {
+  payout_batch_id uuid [pk]
+
+  currency varchar
+  scheduled_at_utc timestamp
+  executed_at_utc timestamp
+
+  status varchar
+  // scheduled | processing | completed | failed | partially_completed
+
+  Note: "Execution container; must be idempotent"
+}
+
+// ------------------------------------------------------------
+// Individual payout items (per creator)
+// ------------------------------------------------------------
+Table payout_items {
+  payout_item_id uuid [pk]
+
+  payout_batch_id uuid
+  creator_identity_id uuid
+
+  amount_cents int
+  currency varchar
+
+  status varchar
+  // pending | completed | failed
+
+  executed_at_utc timestamp
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: ledger_entries.creator_identity_id > identities.identity_id
+Ref: creator_wallets.creator_identity_id > identities.identity_id
+Ref: settlement_records.creator_identity_id > identities.identity_id
+Ref: payout_items.creator_identity_id > identities.identity_id
+
+Ref: ledger_entries.source_payment_event_id > payment_events.payment_event_id
+Ref: settlement_records.payment_event_id > payment_events.payment_event_id
+Ref: applied_fee_snapshots.payment_event_id > payment_events.payment_event_id
+Ref: applied_fee_snapshots.policy_id_used > platform_fee_policies.policy_id
+
+Ref: payout_items.payout_batch_id > payout_batches.payout_batch_id
+
+// ============================================================
+// Membership Relationships Schema
+// Implements: membership_relationships_contract
+// Authority: Supporter–creator relationship lifecycle & semantics
+// Observes subscription & access; never mutates them
+// ============================================================
+
+// ------------------------------------------------------------
+// Membership (relationship projection)
+// ------------------------------------------------------------
+Table memberships {
+  membership_id uuid [pk]
+
+  supporter_identity_id uuid
+  creator_identity_id uuid
+  subscription_id uuid
+
+  current_state varchar
+  // active | paused | cancelled | churned | past_member
+
+  joined_at_utc timestamp
+  first_payment_at_utc timestamp
+
+  paused_at_utc timestamp
+  resume_at_utc timestamp
+
+  cancelled_at_utc timestamp
+  churned_at_utc timestamp
+
+  previous_membership_id uuid
+
+  Note: "One row = current relationship state (projection)"
+}
+
+// ------------------------------------------------------------
+// Immutable membership state history (audit trail)
+// ------------------------------------------------------------
+Table membership_state_history {
+  state_change_id uuid [pk]
+
+  membership_id uuid
+
+  prior_state varchar
+  new_state varchar
+
+  reason varchar
+  // user_initiated | payment_failed | refund | chargeback | system
+
+  initiated_by varchar
+  // supporter | system | admin
+
+  changed_at_utc timestamp
+
+  Note: "Append-only, replayable"
+}
+
+// ------------------------------------------------------------
+// Loyalty & lifecycle metrics (derived, overwriteable)
+// ------------------------------------------------------------
+Table membership_loyalty_metrics {
+  membership_id uuid [pk]
+
+  tenure_months int
+  consecutive_months int
+  lifetime_value_cents int
+  loyalty_tier varchar
+  churn_risk_score decimal
+
+  last_computed_at_utc timestamp
+
+  Note: "Derived from events & payments; rebuildable"
+}
+
+// ------------------------------------------------------------
+// Engagement signals (observational only)
+// ------------------------------------------------------------
+Table engagement_signals {
+  signal_id uuid [pk]
+
+  membership_id uuid
+  signal_type varchar
+  // content_viewed | comment_posted | reaction_added | message_sent
+
+  occurred_at_utc timestamp
+
+  Note: "Signals never affect access or payment"
+}
+
+// ------------------------------------------------------------
+// Cancellation surveys (product insight)
+// ------------------------------------------------------------
+Table cancellation_surveys {
+  survey_id uuid [pk]
+
+  membership_id uuid
+
+  cancellation_reason varchar
+  feedback_text varchar
+  would_recommend varchar // yes | no | maybe
+
+  submitted_at_utc timestamp
+
+  Note: "Optional, non-critical data"
+}
+
+// ------------------------------------------------------------
+// Admin override & manual actions (audit only)
+// ------------------------------------------------------------
+Table membership_admin_actions {
+  admin_action_id uuid [pk]
+
+  membership_id uuid
+  admin_identity_id uuid
+
+  action_type varchar
+  // force_state_change | loyalty_correction | lifetime_grant | bulk_cancel
+
+  reason varchar
+  performed_at_utc timestamp
+
+  Note: "Human-in-the-loop corrections"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: memberships.supporter_identity_id > identities.identity_id
+Ref: memberships.creator_identity_id > identities.identity_id
+Ref: memberships.subscription_id > subscriptions.subscription_id
+Ref: memberships.previous_membership_id > memberships.membership_id
+
+Ref: membership_state_history.membership_id > memberships.membership_id
+Ref: membership_loyalty_metrics.membership_id > memberships.membership_id
+Ref: engagement_signals.membership_id > memberships.membership_id
+Ref: cancellation_surveys.membership_id > memberships.membership_id
+
+Ref: membership_admin_actions.membership_id > memberships.membership_id
+Ref: membership_admin_actions.admin_identity_id > identities.identity_id
+
+// ============================================================
+// Notification Schema
+// Implements: notification_contract
+// Authority: Notification delivery state ONLY
+// Side-effect isolation via outbox pattern
+// ============================================================
+
+// ------------------------------------------------------------
+// Notification intent (logical decision to notify)
+// ------------------------------------------------------------
+Table notification_intents {
+  intent_id uuid [pk]
+
+  source_event_id uuid
+  recipient_identity_id uuid
+
+  notification_type varchar
+  // payment_failed | membership_cancelled | access_granted | payout_completed | new_content
+
+  created_at_utc timestamp
+
+  Note: "One intent per (event, recipient); idempotent"
+  
+  Indexes {
+    (source_event_id, recipient_identity_id, notification_type) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Notification templates (versioned, immutable once used)
+// ------------------------------------------------------------
+Table notification_templates {
+  template_id uuid [pk]
+
+  notification_type varchar
+  channel varchar // email | push | in_app
+  locale varchar
+  version int
+
+  created_at_utc timestamp
+
+  Note: "Templates are versioned; changes never affect sent messages"
+  
+  Indexes {
+    (notification_type, channel, locale, version) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Outbox entries (delivery requests)
+// ------------------------------------------------------------
+Table notification_outbox {
+  outbox_id uuid [pk]
+
+  intent_id uuid
+  channel varchar // email | push | in_app
+  provider varchar // sendgrid | fcm | internal
+
+  status varchar
+  // pending | processing | sent | failed | discarded
+
+  created_at_utc timestamp
+  last_attempted_at_utc timestamp
+
+  Note: "Append-only; deduplicated per intent & channel"
+  
+  Indexes {
+    (intent_id, channel) [unique]
+  }
+}
+
+// ------------------------------------------------------------
+// Delivery attempts (immutable audit trail)
+// ------------------------------------------------------------
+Table delivery_attempts {
+  attempt_id uuid [pk]
+
+  outbox_id uuid
+  provider_response varchar
+  success boolean
+
+  attempted_at_utc timestamp
+
+  Note: "Multiple attempts allowed; never duplicate user-visible messages"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: notification_intents.recipient_identity_id > identities.identity_id
+Ref: notification_outbox.intent_id > notification_intents.intent_id
+Ref: delivery_attempts.outbox_id > notification_outbox.outbox_id
+
+// ============================================================
+// Dispute Resolution Schema
+// Implements: dispute_resolution_contract
+// Authority: Dispute lifecycle & resolution decisions ONLY
+// Must NEVER mutate business, financial, or access truth
+// ============================================================
+
+// ------------------------------------------------------------
+// Dispute case (top-level container)
+// ------------------------------------------------------------
+Table dispute_cases {
+  dispute_id uuid [pk]
+
+  dispute_type varchar
+  // refund_request | access_issue | chargeback | content_issue | payout_issue
+
+  initiator_identity_id uuid
+  subject_reference varchar
+  // subscription:{id} | payment_event:{id} | content:{id} | payout:{id}
+
+  current_state varchar
+  // opened | under_review | awaiting_evidence | resolved | rejected | escalated
+
+  created_at_utc timestamp
+  closed_at_utc timestamp
+
+  Note: "One dispute = one claim about system behavior"
+}
+
+// ------------------------------------------------------------
+// Immutable dispute events (lifecycle history)
+// ------------------------------------------------------------
+Table dispute_events {
+  dispute_event_id uuid [pk]
+
+  dispute_id uuid
+
+  event_type varchar
+  // opened | evidence_submitted | review_started
+  // resolution_proposed | resolved | rejected | escalated
+
+  actor_type varchar
+  // supporter | creator | support_agent | system
+
+  occurred_at_utc timestamp
+
+  Note: "Append-only; replayable; explains dispute evolution"
+}
+
+// ------------------------------------------------------------
+// Evidence artifacts (snapshotted references)
+// ------------------------------------------------------------
+Table evidence_artifacts {
+  artifact_id uuid [pk]
+
+  dispute_id uuid
+
+  artifact_type varchar
+  // payment_record | access_snapshot | content_snapshot | conversation_log | external_doc
+
+  reference varchar
+  // immutable snapshot reference (URL, blob id, checksum)
+
+  submitted_at_utc timestamp
+
+  Note: "Evidence must never change after submission"
+}
+
+// ------------------------------------------------------------
+// Resolution decision (final outcome)
+// ------------------------------------------------------------
+Table resolution_decisions {
+  decision_id uuid [pk]
+
+  dispute_id uuid
+
+  decision_type varchar
+  // refund_approved | refund_denied
+  // access_issue_confirmed | no_issue_found
+  // manual_adjustment_required
+
+  decided_by varchar
+  // support_agent | system | escalation_committee
+
+  decided_at_utc timestamp
+
+  Note: "Decisions emit events; they do NOT perform mutations"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: dispute_events.dispute_id > dispute_cases.dispute_id
+Ref: evidence_artifacts.dispute_id > dispute_cases.dispute_id
+Ref: resolution_decisions.dispute_id > dispute_cases.dispute_id
+
+Ref: dispute_cases.initiator_identity_id > identities.identity_id
+
+// ============================================================
+// Creator Reporting Schema
+// Implements: creator_reporting_contract
+// Authority: Read-only reporting projections ONLY
+// All data is derived, explainable, and rebuildable
+// ============================================================
+
+// ------------------------------------------------------------
+// Revenue & earnings report (aggregated, explainable)
+// ------------------------------------------------------------
+Table revenue_reports {
+  report_id uuid [pk]
+
+  creator_identity_id uuid
+  time_period varchar
+  // daily | weekly | monthly | custom
+
+  currency varchar
+
+  gross_earnings_cents int
+  platform_fees_cents int
+  net_earnings_cents int
+
+  refund_amount_cents int
+  chargeback_amount_cents int
+
+  computed_at_utc timestamp
+
+  Note: "Derived from ledger_entries; never mutated manually"
+}
+
+// ------------------------------------------------------------
+// Payout status visibility
+// ------------------------------------------------------------
+Table payout_status_reports {
+  report_id uuid [pk]
+
+  creator_identity_id uuid
+  currency varchar
+
+  pending_payout_amount_cents int
+  last_payout_at_utc timestamp
+  failed_payout_count int
+
+  computed_at_utc timestamp
+
+  Note: "Derived from payout_batches & payout_items"
+}
+
+// ------------------------------------------------------------
+// Content performance metrics
+// ------------------------------------------------------------
+Table content_performance_reports {
+  report_id uuid [pk]
+
+  content_id uuid
+  creator_identity_id uuid
+  time_period varchar
+
+  views int
+  unique_viewers int
+  engagement_events int
+
+  computed_at_utc timestamp
+
+  Note: "Derived from engagement & access logs only"
+}
+
+// ------------------------------------------------------------
+// Supporter lifecycle & membership metrics
+// ------------------------------------------------------------
+Table supporter_activity_reports {
+  report_id uuid [pk]
+
+  creator_identity_id uuid
+  time_period varchar
+
+  active_supporters int
+  new_supporters int
+  paused_supporters int
+  churned_supporters int
+
+  retention_rate decimal
+  average_tenure_months decimal
+
+  computed_at_utc timestamp
+
+  Note: "Derived from membership_relationships"
+}
+
+// ------------------------------------------------------------
+// Drill-down explainability references
+// ------------------------------------------------------------
+Table report_explanations {
+  explanation_id uuid [pk]
+
+  report_id uuid
+  source_type varchar
+  // ledger_entry | membership_event | content_event | payout_item
+
+  source_reference_id uuid
+  note varchar
+
+  Note: "Allows tracing reported numbers back to source facts"
+}
+
+// ------------------------------------------------------------
+// Projection rebuild tracking
+// ------------------------------------------------------------
+Table report_rebuild_runs {
+  rebuild_run_id uuid [pk]
+
+  report_type varchar
+  triggered_by varchar
+  // scheduled | manual | backfill
+
+  started_at_utc timestamp
+  completed_at_utc timestamp
+  status varchar
+  // running | completed | failed
+
+  Note: "Operational observability only"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: revenue_reports.creator_identity_id > identities.identity_id
+Ref: payout_status_reports.creator_identity_id > identities.identity_id
+Ref: content_performance_reports.creator_identity_id > identities.identity_id
+Ref: supporter_activity_reports.creator_identity_id > identities.identity_id
+
+Ref: content_performance_reports.content_id > creator_content.content_id
+Ref: report_explanations.report_id > revenue_reports.report_id
+Ref: report_explanations.source_reference_id > ledger_entries.ledger_entry_id
+
+// ============================================================
+// Feed & Discovery Schema
+// Implements: feed_discovery_contract
+// Authority: Ranking & projection ONLY (UX concern)
+// Must NEVER influence access, payment, or content authority
+// ============================================================
+
+// ------------------------------------------------------------
+// Feed items (ranked projection entries)
+// ------------------------------------------------------------
+Table feed_items {
+  feed_item_id uuid [pk]
+
+  feed_type varchar
+  // home | creator_profile | discover | trending | recent
+
+  content_id uuid
+  creator_identity_id uuid
+
+  rank_score decimal
+  computed_at_utc timestamp
+
+  Note: "Ephemeral ranked entry; safe to delete & rebuild"
+}
+
+// ------------------------------------------------------------
+// Feed computation runs (observability only)
+// ------------------------------------------------------------
+Table feed_computation_runs {
+  computation_run_id uuid [pk]
+
+  feed_type varchar
+  triggered_by varchar
+  // scheduled | user_request | backfill
+
+  started_at_utc timestamp
+  completed_at_utc timestamp
+  status varchar
+  // running | completed | failed
+
+  Note: "Operational visibility for ranking jobs"
+}
+
+// ------------------------------------------------------------
+// Discovery signals (observational inputs)
+// ------------------------------------------------------------
+Table discovery_signals {
+  signal_id uuid [pk]
+
+  content_id uuid
+  signal_type varchar
+  // view | like | comment | share | follow | watch_time
+
+  occurred_at_utc timestamp
+
+  Note: "Signals are observational; never authoritative"
+}
+
+// ------------------------------------------------------------
+// Creator follow relationships (read-model only)
+// ------------------------------------------------------------
+Table creator_follows {
+  follower_identity_id uuid
+  creator_identity_id uuid
+
+  followed_at_utc timestamp
+
+  Indexes {
+    (follower_identity_id, creator_identity_id) [unique]
+  }
+
+  Note: "Used for feed personalization only"
+}
+
+// ------------------------------------------------------------
+// Relationships (documented, not DB-enforced)
+// ------------------------------------------------------------
+Ref: feed_items.content_id > creator_content.content_id
+Ref: feed_items.creator_identity_id > identities.identity_id
+
+Ref: discovery_signals.content_id > creator_content.content_id
+
+Ref: creator_follows.follower_identity_id > identities.identity_id
+Ref: creator_follows.creator_identity_id > identities.identity_id
