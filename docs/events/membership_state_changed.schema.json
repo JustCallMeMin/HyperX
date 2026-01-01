@@ -1,0 +1,75 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "MembershipStateChangedEvent",
+    "version": "1.0",
+    "type": "object",
+    "required": [
+      "event_id",
+      "event_type",
+      "occurred_at_utc",
+      "aggregate",
+      "payload"
+    ],
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "event_type": {
+        "type": "string",
+        "enum": ["MembershipStateChanged"]
+      },
+      "occurred_at_utc": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "aggregate": {
+        "type": "object",
+        "required": ["membership_id"],
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "causation_id": {
+        "type": ["string", "null"],
+        "format": "uuid"
+      },
+      "actor": {
+        "type": "object",
+        "required": ["actor_type"],
+        "properties": {
+          "actor_type": {
+            "type": "string",
+            "enum": ["system", "supporter", "creator", "admin"]
+          },
+          "actor_identity_id": {
+            "type": ["string", "null"],
+            "format": "uuid"
+          }
+        }
+      },
+      "payload": {
+        "type": "object",
+        "required": ["from_state", "to_state"],
+        "properties": {
+          "from_state": {
+            "type": ["string", "null"]
+          },
+          "to_state": {
+            "type": "string"
+          },
+          "reason": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "guaranteed_invariants": [
+      "Membership state transitions are append-only",
+      "Current membership state is a projection of events",
+      "Membership can always be rebuilt from event history"
+    ]
+  }  

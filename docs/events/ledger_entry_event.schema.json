@@ -1,0 +1,76 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "LedgerEntryEvent",
+    "version": "1.0",
+    "type": "object",
+    "required": [
+      "event_id",
+      "event_type",
+      "occurred_at_utc",
+      "aggregate",
+      "idempotency_key",
+      "payload"
+    ],
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "event_type": {
+        "type": "string",
+        "enum": [
+          "LedgerCredit",
+          "LedgerDebit",
+          "PlatformFeeApplied"
+        ]
+      },
+      "occurred_at_utc": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "aggregate": {
+        "type": "object",
+        "required": ["creator_identity_id"],
+        "properties": {
+          "creator_identity_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "causation_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "PaymentEvent that caused this ledger entry"
+      },
+      "idempotency_key": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "required": ["amount_cents", "currency", "entry_type"],
+        "properties": {
+          "entry_type": {
+            "type": "string",
+            "enum": [
+              "payment_credit",
+              "refund_debit",
+              "chargeback_debit",
+              "platform_fee"
+            ]
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "guaranteed_invariants": [
+      "Ledger entries are append-only",
+      "Every ledger entry is causally linked to a PaymentEvent",
+      "Ledger is the single source of financial truth"
+    ]
+  }  

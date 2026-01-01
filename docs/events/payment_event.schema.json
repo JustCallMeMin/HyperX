@@ -1,0 +1,84 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "PaymentEvent",
+    "version": "1.0",
+    "type": "object",
+    "required": [
+      "event_id",
+      "event_type",
+      "occurred_at_utc",
+      "provider",
+      "provider_event_id",
+      "aggregate",
+      "idempotency_key",
+      "payload"
+    ],
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Globally unique event identifier"
+      },
+      "event_type": {
+        "type": "string",
+        "enum": [
+          "PaymentSucceeded",
+          "PaymentFailed",
+          "RefundIssued",
+          "ChargebackCreated",
+          "ChargebackResolved"
+        ]
+      },
+      "occurred_at_utc": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["stripe"]
+      },
+      "provider_event_id": {
+        "type": "string",
+        "description": "Event id from payment provider"
+      },
+      "aggregate": {
+        "type": "object",
+        "required": ["subscription_id"],
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "causation_id": {
+        "type": ["string", "null"],
+        "format": "uuid",
+        "description": "Event that caused this event"
+      },
+      "idempotency_key": {
+        "type": "string",
+        "description": "Used to deduplicate provider retries"
+      },
+      "payload": {
+        "type": "object",
+        "required": ["amount_cents", "currency"],
+        "properties": {
+          "amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "failure_reason": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "guaranteed_invariants": [
+      "provider + provider_event_id is globally unique",
+      "PaymentEvent is immutable",
+      "PaymentEvent never mutates ledger or access directly"
+    ]
+  }
