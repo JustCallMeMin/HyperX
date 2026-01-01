@@ -1,0 +1,219 @@
+{
+    "contract_scope": {
+      "name": "identity_access_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [],
+      "allowed_changes": [
+        "new_identity_providers",
+        "new_role_types",
+        "new_capability_definitions"
+      ],
+      "forbidden_changes": [
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "content_visibility_mutation",
+        "payment_state_mutation",
+        "relationship_state_mutation"
+      ],
+      "rule": "This contract defines identity, authentication context, and authorization capabilities without determining business entitlements or access truth."
+    },
+  
+    "architecture_principle": "identity_as_security_boundary",
+  
+    "purpose": "Resolve authenticated identities into principals, roles, and capabilities used by downstream contracts for authorization decisions.",
+  
+    "core_invariant": {
+      "rule": "Every request must be attributable to a valid identity and an explicit authorization context.",
+      "failure_is": "unauthenticated_or_unauthorized_access"
+    },
+  
+    "authoritative_boundaries": {
+      "authentication_provider": {
+        "source": "external_idp",
+        "authority": "authoritative"
+      },
+      "identity_access": {
+        "authority": "authoritative_for_identity_and_capabilities"
+      }
+    },
+  
+    "identity_entities": {
+      "Identity": {
+        "description": "Canonical representation of an authenticated entity",
+        "fields": [
+          "identity_id",
+          "identity_type",
+          "provider",
+          "created_at_utc",
+          "status"
+        ],
+        "identity_types": [
+          "user",
+          "service",
+          "support_agent"
+        ],
+        "status_values": [
+          "active",
+          "suspended",
+          "revoked"
+        ],
+        "rules": [
+          "Identities are immutable in type",
+          "Revoked identities must not authenticate"
+        ]
+      },
+  
+      "Principal": {
+        "description": "Operational actor derived from an identity",
+        "fields": [
+          "principal_id",
+          "identity_id",
+          "principal_type",
+          "scope"
+        ],
+        "principal_types": [
+          "supporter",
+          "creator",
+          "creator_team_member",
+          "admin"
+        ],
+        "rules": [
+          "A single identity may have multiple principals",
+          "Principals define perspective, not entitlement"
+        ]
+      },
+  
+      "RoleAssignment": {
+        "description": "Role granted to a principal within a scope",
+        "fields": [
+          "principal_id",
+          "role",
+          "scope",
+          "granted_at_utc"
+        ],
+        "roles": [
+          "viewer",
+          "supporter",
+          "creator_owner",
+          "creator_editor",
+          "support_agent",
+          "system_admin"
+        ],
+        "rules": [
+          "Roles are additive",
+          "Roles must be explicitly scoped"
+        ]
+      },
+  
+      "CapabilityGrant": {
+        "description": "Fine-grained permission derived from roles",
+        "fields": [
+          "capability",
+          "principal_id",
+          "scope"
+        ],
+        "rules": [
+          "Capabilities are derived, not manually assigned",
+          "Capabilities must never imply entitlement"
+        ]
+      },
+  
+      "SessionContext": {
+        "description": "Bound authentication context for a request",
+        "fields": [
+          "session_id",
+          "identity_id",
+          "principal_id",
+          "issued_at_utc",
+          "expires_at_utc"
+        ],
+        "rules": [
+          "Session must be time-bounded",
+          "Expired sessions must be rejected"
+        ]
+      }
+    },
+  
+    "authorization_flow": {
+      "process": [
+        "Authenticate identity via provider",
+        "Resolve identity to principals",
+        "Resolve principal to roles",
+        "Derive capabilities",
+        "Attach authorization context to request"
+      ],
+      "rules": [
+        "Authorization context must be explicit",
+        "Authorization must fail closed",
+        "Authorization must precede business logic"
+      ]
+    },
+  
+    "integration_contracts": {
+      "core_subscription_contract": {
+        "consumes": [
+          "principal_id",
+          "capabilities"
+        ]
+      },
+      "content_distribution_contract": {
+        "consumes": [
+          "principal_id",
+          "capabilities"
+        ]
+      },
+      "dispute_resolution_contract": {
+        "consumes": [
+          "principal_id",
+          "role"
+        ]
+      }
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Unauthorized access attempts must be logged",
+        "Repeated violations must trigger alerts",
+        "Identity suspension must invalidate sessions"
+      ]
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Identity state is authoritative and persisted",
+        "Sessions are not replayed"
+      ],
+      "safety_rules": [
+        "Replay must not mint new sessions",
+        "Replay must not elevate privileges"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "authentication_failure_rate",
+        "authorization_denial_rate",
+        "active_session_count"
+      ],
+      "alerts": [
+        "unauthorized_access_spike",
+        "privilege_escalation_detected"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Subscription entitlement decisions",
+      "Content visibility rules",
+      "Payment authorization",
+      "Relationship lifecycle management"
+    ],
+  
+    "production_guarantees": {
+      "fail_closed_security": true,
+      "least_privilege": true,
+      "auditability": true,
+      "no_authority_leakage": true
+    }
+  }
+  

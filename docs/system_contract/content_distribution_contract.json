@@ -1,238 +1,201 @@
 {
     "contract_scope": {
-      "name": "creator_economy_contract",
+      "name": "content_distribution_contract",
       "status": "active",
       "authoritative": true,
       "depends_on": [
         "core_subscription_contract"
       ],
       "allowed_changes": [
-        "new_settlement_channels",
-        "new_fee_policies",
-        "regulatory_compliance_updates",
-        "settlement_visibility_extensions"
+        "new_content_types",
+        "new_visibility_rules",
+        "new_distribution_channels"
       ],
       "forbidden_changes": [
         "subscription_state_mutation",
         "access_entitlement_mutation",
         "payment_event_mutation",
-        "historical_ledger_rewrites"
+        "creator_earnings_logic"
       ],
-      "rule": "This contract defines financial correctness for creator earnings and payouts and must not mutate subscription or access state."
+      "rule": "This contract defines how content is published, gated, and distributed using access entitlements without mutating subscription or payment state."
     },
   
-    "architecture_principle": "ledger_first_creator_accounting",
+    "architecture_principle": "access_consuming_content_projection",
   
-    "purpose": "Manage creator earnings, platform fees, settlement visibility, and payouts derived from successful payments without mutating subscription or access state.",
+    "purpose": "Control content publication, visibility, and access resolution based on derived access entitlements.",
   
     "core_invariant": {
-      "rule": "Every successful payment must eventually be reflected in creator earnings minus platform fees, or be explicitly marked as unrecoverable.",
-      "failure_is": "financial_integrity_violation"
+      "rule": "Content visibility must always be consistent with access entitlements and declared visibility policies.",
+      "failure_is": "content_visibility_violation"
     },
   
     "authoritative_boundaries": {
-      "payment_events": {
-        "source": "core_subscription_contract.PaymentEvent",
-        "authority": "read_only"
-      },
       "access_entitlement": {
         "source": "core_subscription_contract.AccessEntitlement",
         "authority": "read_only"
       },
-      "creator_economy": {
-        "authority": "authoritative_for_financial_state"
+      "subscription_state": {
+        "source": "core_subscription_contract.Subscription",
+        "authority": "read_only"
+      },
+      "content_distribution": {
+        "authority": "authoritative_for_content_visibility"
       }
     },
   
-    "financial_entities": {
-      "CreatorWallet": {
-        "description": "Derived balance snapshot per creator",
+    "content_entities": {
+      "CreatorContent": {
+        "description": "Logical content unit created by a creator",
         "fields": [
+          "content_id",
           "creator_id",
-          "available_balance",
-          "pending_balance",
-          "currency",
-          "last_updated_at_utc"
-        ],
-        "rules": [
-          "Wallet balance is derived from ledger entries",
-          "Wallet balance must never be updated directly",
-          "Wallet balance must be fully recalculable from ledger history"
-        ]
-      },
-  
-      "LedgerEntry": {
-        "description": "Immutable creator earnings and payout record",
-        "fields": [
-          "ledger_entry_id",
-          "creator_id",
-          "source_event_id",
-          "entry_type",
-          "amount",
-          "currency",
-          "occurred_at_utc"
-        ],
-        "entry_types": [
-          "payment_credit",
-          "platform_fee",
-          "refund_debit",
-          "chargeback_debit",
-          "payout_debit",
-          "adjustment_credit",
-          "adjustment_debit"
-        ],
-        "rules": [
-          "Ledger entries are immutable",
-          "Ledger entries must reference a source payment event",
-          "Ledger represents creator-facing financial truth"
-        ]
-      },
-  
-      "SettlementRecord": {
-        "description": "Operational settlement visibility per payment event",
-        "fields": [
-          "payment_event_id",
-          "creator_id",
-          "settlement_status",
-          "settled_at_utc",
-          "note"
-        ],
-        "status_values": [
-          "pending",
-          "settled",
-          "unrecoverable"
-        ],
-        "rules": [
-          "SettlementRecord is derived from ledger state",
-          "SettlementRecord must not mutate ledger history",
-          "SettlementRecord exists for support, ops, and creator visibility"
-        ]
-      },
-  
-      "PlatformFeePolicy": {
-        "description": "Defines how platform fees are calculated",
-        "fields": [
-          "policy_id",
-          "fee_percentage",
-          "flat_fee",
-          "effective_from_utc",
-          "effective_to_utc"
-        ],
-        "rules": [
-          "Fee policy changes must not rewrite historical ledger entries",
-          "Applied fee parameters must be snapshotted at settlement time"
-        ]
-      },
-  
-      "AppliedFeeSnapshot": {
-        "description": "Explicit snapshot of platform fee applied to a payment",
-        "fields": [
-          "payment_event_id",
-          "policy_id_used",
-          "fee_percentage_used",
-          "flat_fee_used",
-          "applied_at_utc"
-        ],
-        "rules": [
-          "Fee snapshot is immutable",
-          "Fee snapshot is used for audit and creator transparency"
-        ]
-      },
-  
-      "PayoutBatch": {
-        "description": "Scheduled creator payout execution unit",
-        "fields": [
-          "payout_batch_id",
-          "currency",
-          "scheduled_at_utc",
-          "executed_at_utc",
+          "content_type",
+          "created_at_utc",
+          "published_at_utc",
           "status"
         ],
         "status_values": [
+          "draft",
           "scheduled",
-          "processing",
-          "completed",
-          "failed",
-          "partially_completed"
+          "published",
+          "archived"
         ],
         "rules": [
-          "Payout batches must be idempotent",
-          "Failed payouts must not affect ledger integrity"
+          "Content may only be visible after publication",
+          "Archived content must not appear in feeds",
+          "Draft content is never externally visible"
+        ]
+      },
+  
+      "ContentAsset": {
+        "description": "Media or payload associated with content",
+        "fields": [
+          "asset_id",
+          "content_id",
+          "asset_type",
+          "storage_reference",
+          "created_at_utc"
+        ],
+        "rules": [
+          "Assets must not embed access rules",
+          "Assets inherit visibility from parent content"
+        ]
+      },
+  
+      "VisibilityPolicy": {
+        "description": "Defines who may view a piece of content",
+        "fields": [
+          "policy_id",
+          "visibility_type",
+          "effective_from_utc"
+        ],
+        "visibility_types": [
+          "public",
+          "members_only",
+          "tier_gated",
+          "creator_only"
+        ],
+        "rules": [
+          "Visibility policies must be evaluated deterministically",
+          "Policy changes must not rewrite historical access decisions"
+        ]
+      },
+  
+      "TierGateRule": {
+        "description": "Defines tier-based access requirements for content",
+        "fields": [
+          "tier_id",
+          "minimum_required",
+          "effective_from_utc"
+        ],
+        "rules": [
+          "Tier gates consume access entitlements only",
+          "Tier evaluation must not query subscription state directly"
         ]
       }
     },
   
-    "settlement_flow": {
-      "trigger_events": [
-        "PaymentSucceeded",
-        "PaymentRefunded",
-        "PaymentChargeback"
+    "access_resolution": {
+      "inputs": [
+        "AccessEntitlement",
+        "VisibilityPolicy",
+        "TierGateRule"
       ],
       "process": [
-        "Read immutable payment event",
-        "Determine applicable platform fee policy",
-        "Emit immutable ledger entries",
-        "Update wallet projection",
-        "Update settlement visibility"
+        "Evaluate content publication status",
+        "Resolve visibility policy",
+        "Validate tier entitlement",
+        "Grant or deny content access"
       ],
       "rules": [
-        "Settlement must be idempotent per payment event",
-        "Chargebacks override refunds",
-        "Settlement outcome must not depend on event arrival order"
+        "Access resolution must be deterministic",
+        "Access checks must not mutate state",
+        "Access resolution must be batchable"
       ]
     },
   
-    "negative_balance_handling": {
-      "principle": "creator_platform_safe_guard",
+    "content_projection": {
+      "purpose": "Provide fast, read-optimized views of accessible content",
       "rules": [
-        "Negative creator balances must be tracked explicitly",
-        "Creators with negative balance must not receive payouts",
-        "Negative balances require manual review and resolution",
-        "Negative balance resolution must be auditable"
+        "Projections are derived and rebuildable",
+        "Projections must be invalidated on entitlement changes",
+        "Projection rebuilds must be replay-safe"
+      ]
+    },
+  
+    "historical_access_rules": {
+      "rules": [
+        "Content visibility at time T must be explainable",
+        "Historical access decisions must be auditable",
+        "Backfilled access for new supporters must follow declared policies"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Visibility violations must emit alerts",
+        "Ambiguous access must default to deny",
+        "Human review is required for manual overrides"
       ]
     },
   
     "replay_and_recovery": {
       "replay_behavior": [
-        "Ledger entries are replayable",
-        "Wallet balances are recomputed from ledger",
-        "Settlement records are recomputed from ledger",
-        "External payouts are never re-triggered on replay"
+        "Content projections are rebuildable",
+        "Visibility decisions are replayable",
+        "External delivery must not be re-triggered"
       ],
       "safety_rules": [
-        "Replay must never trigger bank transfers",
-        "Replay must not change payout execution state"
+        "Replay must never expose restricted content",
+        "Replay must not trigger notifications"
       ]
     },
   
     "observability": {
       "key_metrics": [
-        "creator_gross_earnings",
-        "platform_fee_total",
-        "pending_payout_amount",
-        "unsettled_payment_count",
-        "negative_balance_count"
+        "content_view_rate",
+        "access_denial_rate",
+        "tier_gate_miss_rate",
+        "projection_rebuild_time"
       ],
       "alerts": [
-        "settlement_failure",
-        "payout_batch_failure",
-        "ledger_inconsistency_detected"
+        "content_visibility_violation",
+        "projection_inconsistency_detected"
       ]
     },
   
     "explicit_non_responsibilities": [
-      "Access control decisions",
-      "Subscription lifecycle management",
-      "Content visibility logic",
-      "Banking or payment processor responsibilities"
+      "Subscription lifecycle decisions",
+      "Payment or payout logic",
+      "Creator earnings computation",
+      "User relationship management"
     ],
   
     "production_guarantees": {
-      "ledger_immutability": true,
+      "deterministic_visibility": true,
       "replay_safe": true,
-      "idempotent_settlement": true,
       "auditability": true,
-      "creator_transparency_ready": true
+      "access_fail_closed": true
     }
   }
   

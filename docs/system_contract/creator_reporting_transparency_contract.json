@@ -1,0 +1,186 @@
+{
+    "contract_scope": {
+      "name": "creator_reporting_contract",
+      "status": "active",
+      "authoritative": true,
+      "depends_on": [
+        "creator_economy_contract",
+        "content_distribution_contract",
+        "membership_relationships_contract"
+      ],
+      "allowed_changes": [
+        "new_report_types",
+        "new_aggregations",
+        "new_dimensions"
+      ],
+      "forbidden_changes": [
+        "ledger_mutation",
+        "wallet_mutation",
+        "subscription_state_mutation",
+        "access_entitlement_mutation",
+        "content_visibility_mutation",
+        "payout_execution"
+      ],
+      "rule": "This contract provides transparent, explainable, read-only reporting derived from authoritative contracts without mutating business or financial state."
+    },
+  
+    "architecture_principle": "read_only_explainable_projections",
+  
+    "purpose": "Provide creators with accurate, auditable explanations of earnings, content performance, and supporter activity derived from authoritative sources.",
+  
+    "core_invariant": {
+      "rule": "All reported data must be explainable by underlying authoritative events and ledger entries.",
+      "failure_is": "reporting_inconsistency_violation"
+    },
+  
+    "authoritative_boundaries": {
+      "creator_economy": {
+        "source": "creator_economy_contract",
+        "authority": "read_only"
+      },
+      "content_distribution": {
+        "source": "content_distribution_contract",
+        "authority": "read_only"
+      },
+      "membership_relationships": {
+        "source": "membership_relationships_contract",
+        "authority": "read_only"
+      },
+      "creator_reporting": {
+        "authority": "authoritative_for_reporting_projections"
+      }
+    },
+  
+    "reporting_entities": {
+      "RevenueReport": {
+        "description": "Aggregated revenue and fee breakdown for a creator",
+        "dimensions": [
+          "time_period",
+          "currency"
+        ],
+        "metrics": [
+          "gross_earnings",
+          "platform_fees",
+          "net_earnings",
+          "refund_amount",
+          "chargeback_amount"
+        ],
+        "rules": [
+          "Revenue must reconcile exactly with ledger entries",
+          "Time-based aggregation must be deterministic"
+        ]
+      },
+  
+      "PayoutStatusReport": {
+        "description": "Visibility into payout lifecycle and delays",
+        "metrics": [
+          "pending_payout_amount",
+          "last_payout_date",
+          "failed_payout_count"
+        ],
+        "rules": [
+          "Reported payout state must match payout batch state",
+          "Payout explanations must reference payout batch identifiers"
+        ]
+      },
+  
+      "ContentPerformanceReport": {
+        "description": "Performance metrics per content item",
+        "dimensions": [
+          "content_id",
+          "time_period"
+        ],
+        "metrics": [
+          "views",
+          "unique_viewers",
+          "engagement_events"
+        ],
+        "rules": [
+          "Content metrics must not imply access decisions",
+          "Metrics must be derived from engagement signals only"
+        ]
+      },
+  
+      "SupporterActivityReport": {
+        "description": "Aggregated supporter lifecycle and activity insights",
+        "dimensions": [
+          "membership_state",
+          "time_period"
+        ],
+        "metrics": [
+          "active_supporters",
+          "new_supporters",
+          "paused_supporters",
+          "churned_supporters"
+        ],
+        "rules": [
+          "Supporter counts must reconcile with membership events",
+          "Lifecycle transitions must be explainable per supporter"
+        ]
+      }
+    },
+  
+    "explainability_rules": {
+      "rules": [
+        "Every reported metric must trace back to immutable events",
+        "Drill-down views must reference source identifiers",
+        "Rounding and aggregation rules must be explicit"
+      ]
+    },
+  
+    "projection_management": {
+      "rules": [
+        "All reports are derived projections",
+        "Projections must be rebuildable from source contracts",
+        "Projection rebuilds must be replay-safe"
+      ]
+    },
+  
+    "failure_handling": {
+      "rules": [
+        "Reporting inconsistencies must emit alerts",
+        "Ambiguous data must be marked explicitly",
+        "Human review is required for manual corrections"
+      ]
+    },
+  
+    "replay_and_recovery": {
+      "replay_behavior": [
+        "Reporting projections are rebuildable",
+        "Rebuilds must not affect authoritative state",
+        "Rebuilds must not trigger notifications"
+      ],
+      "safety_rules": [
+        "Replay must never expose private data",
+        "Replay must not execute external side effects"
+      ]
+    },
+  
+    "observability": {
+      "key_metrics": [
+        "report_generation_latency",
+        "reporting_error_rate",
+        "projection_rebuild_time"
+      ],
+      "alerts": [
+        "reporting_inconsistency_detected",
+        "projection_rebuild_failure"
+      ]
+    },
+  
+    "explicit_non_responsibilities": [
+      "Business decision making",
+      "Access control enforcement",
+      "Financial settlement",
+      "Content publication",
+      "Relationship state mutation"
+    ],
+  
+    "production_guarantees": {
+      "read_only": true,
+      "auditability": true,
+      "replay_safe": true,
+      "creator_trust_preserving": true
+    }
+  }
+  
