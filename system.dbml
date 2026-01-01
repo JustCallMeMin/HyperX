@@ -65,6 +65,58 @@ Ref: session_contexts.principal_id > principals.principal_id
 
 
 // ============================================================
+// Event Store Schema
+// Implements: Event sourcing foundation
+// Authority: Single source of truth for all events
+// ============================================================
+
+// ------------------------------------------------------------
+// Events table - the event store
+// This is where ALL events are persisted, regardless of type
+// ------------------------------------------------------------
+Table events {
+  event_id uuid [pk]
+  
+  event_type varchar
+  // PaymentSucceeded | PaymentFailed | LedgerCredit | LedgerDebit
+  // AccessGranted | AccessRevoked | MembershipStateChanged
+  // SubscriptionActivated | SubscriptionCancelled
+  // NotificationIntentCreated | InvariantViolated | etc.
+  
+  aggregate_type varchar
+  // subscription | economy | membership | content | identity | dispute
+  
+  aggregate_id uuid
+  
+  schema_version int
+  
+  occurred_at_utc timestamp
+  
+  causation_id uuid
+  correlation_id uuid
+  idempotency_key varchar
+  
+  actor_type varchar
+  // system | user | admin | supporter | creator
+  
+  actor_identity_id uuid
+  
+  origin_event_type varchar
+  
+  payload_json jsonb
+  
+  Note: "Immutable event store - append only, never updated or deleted"
+  
+  Indexes {
+    (aggregate_type, aggregate_id, occurred_at_utc)
+    (event_type, occurred_at_utc)
+    (causation_id)
+    (correlation_id)
+    (idempotency_key) [unique, where: "idempotency_key IS NOT NULL"]
+  }
+}
+
+// ============================================================
 // Core Subscription Schema
 // Implements: core_subscription_contract
 // Authority: Subscription correctness & access entitlement
@@ -148,6 +200,8 @@ Table payment_attempts {
 // ------------------------------------------------------------
 Table payment_events {
   payment_event_id uuid [pk]
+  event_id uuid // FK to events.event_id
+  
   subscription_id uuid
 
   provider varchar // stripe
@@ -161,10 +215,11 @@ Table payment_events {
 
   occurred_at_utc timestamp
 
-  Note: "Immutable business facts from provider"
+  Note: "Projection from events table - denormalized for query performance"
   
   Indexes {
     (provider, provider_event_id) [unique]
+    event_id [unique]
   }
 }
 
@@ -179,8 +234,8 @@ Table access_entitlements {
   access_start_utc timestamp
   access_end_utc timestamp
 
-  granted_by_event_id uuid
-  revoked_by_event_id uuid
+  granted_by_event_id uuid // FK to events.event_id
+  revoked_by_event_id uuid // FK to events.event_id
 
   created_at_utc timestamp
 
@@ -211,8 +266,10 @@ Ref: subscriptions.creator_identity_id > identities.identity_id
 
 Ref: billing_cycles.subscription_id > subscriptions.subscription_id
 Ref: payment_attempts.subscription_id > subscriptions.subscription_id
+Ref: payment_events.event_id > events.event_id
 Ref: payment_events.subscription_id > subscriptions.subscription_id
 Ref: access_entitlements.subscription_id > subscriptions.subscription_id
+Ref: access_entitlements.granted_by_event_id > events.event_id
 Ref: reconciliation_runs.subscription_id > subscriptions.subscription_id
 
 Ref: access_entitlements.tier_id > subscription_tiers.tier_id
@@ -731,10 +788,13 @@ Table dispute_cases {
 }
 
 // ------------------------------------------------------------
-// Immutable dispute events (lifecycle history)
+// Dispute events (projection from events table)
+// This is a denormalized view for query performance
+// The authoritative source is the events table
 // ------------------------------------------------------------
 Table dispute_events {
   dispute_event_id uuid [pk]
+  event_id uuid // FK to events.event_id
 
   dispute_id uuid
 
@@ -747,7 +807,11 @@ Table dispute_events {
 
   occurred_at_utc timestamp
 
-  Note: "Append-only; replayable; explains dispute evolution"
+  Note: "Projection from events table - denormalized for query performance"
+  
+  Indexes {
+    event_id [unique]
+  }
 }
 
 // ------------------------------------------------------------
@@ -793,6 +857,7 @@ Table resolution_decisions {
 // ------------------------------------------------------------
 // Relationships (documented, not DB-enforced)
 // ------------------------------------------------------------
+Ref: dispute_events.event_id > events.event_id
 Ref: dispute_events.dispute_id > dispute_cases.dispute_id
 Ref: evidence_artifacts.dispute_id > dispute_cases.dispute_id
 Ref: resolution_decisions.dispute_id > dispute_cases.dispute_id
